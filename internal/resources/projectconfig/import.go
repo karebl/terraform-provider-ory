@@ -1,0 +1,94 @@
+package projectconfig
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
+)
+
+// Import has no access to the resource configuration. An explicit field list
+// lets a partial configuration adopt live values without importing unrelated
+// fields that Terraform would otherwise plan to remove. Bare project IDs keep
+// the existing IDs-only import behavior.
+func (r *ProjectConfigResource) importSelectedFields(ctx context.Context, projectID, fields string, resp *resource.ImportStateResponse) {
+	if projectID == "" || strings.TrimSpace(projectID) != projectID || fields == "" {
+		resp.Diagnostics.AddError("Invalid Project Config Import ID", "Use project_id:attribute_one,attribute_two with a non-empty project ID and field list.")
+		return
+	}
+
+	names := strings.Split(fields, ",")
+	selected := make(map[string]attr.Value, len(names))
+	attributes := resp.State.Schema.GetAttributes()
+	for _, name := range names {
+		attribute, exists := attributes[name]
+		if !exists || name == "id" || name == "project_id" || (!attribute.IsOptional() && !attribute.IsRequired()) {
+			resp.Diagnostics.AddError("Invalid Project Config Import Field", fmt.Sprintf("%q is not a configurable project setting.", name))
+			return
+		}
+		if _, duplicate := selected[name]; duplicate {
+			resp.Diagnostics.AddError("Duplicate Project Config Import Field", fmt.Sprintf("%q is listed more than once.", name))
+			return
+		}
+		// Hook readers cannot distinguish malformed lists from absent hooks.
+		if strings.HasPrefix(name, "selfservice_flows_") && strings.Contains(name, "_hook_") {
+			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q is derived from a hook list and cannot be imported by field selection.", name))
+			return
+		}
+		if attribute.IsSensitive() || attribute.IsWriteOnly() {
+			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q is sensitive or write-only and cannot be imported by field selection.", name))
+			return
+		}
+		switch attribute.GetType() {
+		case types.StringType:
+			selected[name] = types.StringUnknown()
+		case types.BoolType:
+			selected[name] = types.BoolUnknown()
+		case types.Int64Type:
+			selected[name] = types.Int64Unknown()
+		default:
+			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q is not a scalar. Field selection supports readable string, bool, and integer settings only.", name))
+			return
+		}
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), projectID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), projectID)...)
+	for name, value := range selected {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root(name), value)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Unknown values request a read without inventing defaults. Resolve them
+	// before returning: import state must never contain unknown values.
+	read := resource.ReadResponse{State: resp.State}
+	r.Read(ctx, resource.ReadRequest{State: resp.State}, &read)
+	resp.Diagnostics.Append(read.Diagnostics...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if read.State.Raw.IsNull() {
+		resp.Diagnostics.AddError("Project Config Not Found", "The selected project no longer exists or has been deleted.")
+		return
+	}
+	var values map[string]tftypes.Value
+	if err := read.State.Raw.As(&values); err != nil {
+		resp.Diagnostics.AddError("Error Reading Imported Project Config", err.Error())
+		return
+	}
+	for _, name := range names {
+		if !values[name].IsKnown() || values[name].IsNull() {
+			resp.Diagnostics.AddError("Project Config Import Field Unavailable", fmt.Sprintf("The provider could not read a value for %q. Remove it from the import selection; no default has been substituted.", name))
+		}
+	}
+	if !resp.Diagnostics.HasError() {
+		resp.State = read.State
+	}
+}
