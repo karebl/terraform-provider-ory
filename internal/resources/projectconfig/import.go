@@ -44,6 +44,11 @@ func (r *ProjectConfigResource) importSelectedFields(ctx context.Context, projec
 			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q is sensitive or write-only and cannot be imported by field selection.", name))
 			return
 		}
+		// This reader needs an existing inline payload to resolve storage URLs.
+		if name == "courier_http_request_config_body" {
+			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q reads back as a storage URL, so field selection cannot recover its inline base64 payload.", name))
+			return
+		}
 		switch attribute.GetType() {
 		case types.StringType:
 			selected[name] = types.StringUnknown()
@@ -85,10 +90,14 @@ func (r *ProjectConfigResource) importSelectedFields(ctx context.Context, projec
 	}
 	for _, name := range names {
 		if !values[name].IsKnown() || values[name].IsNull() {
-			resp.Diagnostics.AddError("Project Config Import Field Unavailable", fmt.Sprintf("The provider could not read a value for %q. Remove it from the import selection; no default has been substituted.", name))
+			resp.Diagnostics.AddError("Project Config Import Field Unavailable", fmt.Sprintf("The provider could not read a value for %q. The API may have omitted the value, the attribute may have no reader, or a read request may have failed. Check the provider logs and retry if a request failed. Otherwise, omit this field from the selection. No default has been substituted.", name))
 		}
 	}
 	if !resp.Diagnostics.HasError() {
 		resp.State = read.State
+		if _, selectedCORS := selected["cors_enabled"]; !selectedCORS {
+			resp.Diagnostics.AddWarning("Project Config Import Leaves CORS Defaulted",
+				"cors_enabled was not selected and has a provider default of false. If your configuration also omits it, the next plan will propose false, and applying that plan can disable public CORS. To adopt its current value, include cors_enabled in both your configuration and import selection.")
+		}
 	}
 }

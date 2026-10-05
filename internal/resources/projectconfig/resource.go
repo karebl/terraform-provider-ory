@@ -590,13 +590,15 @@ Declare the selected attributes with their current live values:
 resource "ory_project_config" "main" {
   project_id       = "<project-id>"
   session_lifespan = "20m0s"
-  cors_enabled    = false
+  cors_enabled     = false
 }
 ` + "`" + `` + "`" + `` + "`" + `
 
-Only the listed fields enter state. Other settings keep their existing ownership. Import uses reads only, and fails if it cannot read a selected value. Select readable, non-sensitive strings, booleans, or integers. Collections, nested objects, secrets, and fields derived from hook lists are not supported by this import form.
+Only the listed fields enter state. Import uses reads only. An unset or unreadable selected value fails the whole import.
 
-Run a normal plan after import. It can still propose changes for configured fields omitted from the selection, provider defaults, or differences from the live values. Include defaulted fields such as ` + "`" + `cors_enabled` + "`" + ` explicitly when establishing a baseline. Import does not improve the resource's existing drift coverage.
+Select readable, non-sensitive strings, booleans, or integers. Collections, nested objects, secrets, fields derived from hook lists, and the courier HTTP request body are not supported by this import form. The courier body reader returns a storage URL without recovering the inline payload. For renamed fields, select either the current name or its deprecated alias, never both.
+
+Run a normal plan after import. It can still propose changes for configured fields omitted from the selection, provider defaults, or differences from the live values. Include defaulted fields such as ` + "`" + `cors_enabled` + "`" + ` explicitly when establishing a baseline. If you omit cors_enabled from both the selection and configuration, a later apply can disable public CORS through its default. Import does not improve the resource's existing drift coverage.
 
 ### Avoiding "Forces Replacement" After Import
 
@@ -1896,7 +1898,7 @@ func (r *ProjectConfigResource) readProjectConfig(ctx context.Context, project *
 
 		// URLs with special behavior
 		if !state.DefaultReturnURL.IsNull() {
-			if state.DefaultReturnURL.ValueString() != "" {
+			if state.DefaultReturnURL.IsUnknown() || state.DefaultReturnURL.ValueString() != "" {
 				if v, ok := getNestedString(identityConfig, "selfservice", "default_browser_return_url"); ok {
 					state.DefaultReturnURL = types.StringValue(v)
 				}
