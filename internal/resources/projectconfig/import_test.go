@@ -99,18 +99,6 @@ func TestImportProjectConfig_LegacyIDDoesNotAcquireFields(t *testing.T) {
 	assert.NotEmpty(t, resp.Diagnostics.Warnings())
 }
 
-func TestImportProjectConfig_RejectsCourierStorageURL(t *testing.T) {
-	document := strings.Replace(importProjectDocument, `"session":`, `"courier":{"http":{"request_config":{"body":"`+storageURL(jsonnetPayload)+`"}}},"session":`, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		assert.Equal(t, http.MethodGet, req.Method)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(document))
-	}))
-	defer srv.Close()
-	resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:courier_http_request_config_body")
-	assert.True(t, resp.Diagnostics.HasError(), "a storage URL must not stand in for the inline courier body")
-}
-
 func TestImportProjectConfig_WarnsForUnselectedCORS(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		assert.Equal(t, http.MethodGet, req.Method)
@@ -196,6 +184,8 @@ func TestImportProjectConfig_RejectsUnsafeSelectionBeforeReading(t *testing.T) {
 		"proj-1:id", "proj-1:project_id", "proj-1:smtp_connection_uri",
 		"proj-1:smtp_connection_uri_wo", "proj-1:keto_namespaces",
 		"proj-1:session_tokenizer_templates",
+		"proj-1:courier_http_request_config_body",
+		"proj-1:selfservice_flows_registration_after_password_hook_session",
 	} {
 		t.Run(id, func(t *testing.T) {
 			// A nil client ensures validation happens before any API access.
@@ -206,19 +196,37 @@ func TestImportProjectConfig_RejectsUnsafeSelectionBeforeReading(t *testing.T) {
 }
 
 func TestImportProjectConfig_DoesNotInventUnreadableValues(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(importProjectDocument))
-	}))
-	defer srv.Close()
-	for _, field := range []string{
-		"smtp_connection_uri_wo_version",                          // Local metadata, with no API value.
-		"selfservice_methods_totp_config_issuer",                  // Readable string, absent from the response.
-		"selfservice_methods_password_config_min_password_length", // Readable integer, absent from the response.
+	for _, tc := range []struct {
+		field    string
+		document string
+		guidance string
+	}{
+		{field: "smtp_connection_uri_wo_version"},                          // Local metadata, with no API value.
+		{field: "selfservice_methods_totp_config_issuer"},                  // Readable string, absent from the response.
+		{field: "selfservice_methods_password_config_min_password_length"}, // Readable integer, absent from the response.
+		{
+			field:    "selfservice_methods_password_config_min_password_length,password_min_length",
+			document: strings.Replace(importProjectDocument, `"password":{"enabled":true}`, `"password":{"enabled":true,"config":{"min_password_length":12}}`, 1),
+			guidance: "If you selected a setting and its deprecated alias, keep one of them.",
+		},
 	} {
-		t.Run(field, func(t *testing.T) {
-			resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:session_lifespan,"+field)
-			assert.True(t, resp.Diagnostics.HasError(), "one unavailable field must fail the import without inventing a default")
+		t.Run(tc.field, func(t *testing.T) {
+			document := tc.document
+			if document == "" {
+				document = importProjectDocument
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(document))
+			}))
+			defer srv.Close()
+			resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:session_lifespan,"+tc.field)
+			require.True(t, resp.Diagnostics.HasError(), "one unavailable field must fail the import without inventing a default")
+			if tc.guidance != "" {
+				require.Len(t, resp.Diagnostics.Errors(), 1)
+				assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), `could not read a value for "password_min_length"`)
+				assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), tc.guidance)
+			}
 		})
 	}
 }
@@ -274,16 +282,4 @@ func TestImportProjectConfig_ReportsReadFailure(t *testing.T) {
 			assert.True(t, resp.Diagnostics.HasError(), "failed reads must not import an empty baseline")
 		})
 	}
-}
-
-// Hook readers interpret malformed hook lists as absent hooks. Until those
-// readers can distinguish the two, import must not turn that into a false value.
-func TestImportProjectConfig_RejectsHookDerivedValues(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"proj-1","name":"example","slug":"example","environment":"stage","home_region":"eu-central","revision_id":"r","organizations":[],"state":"running","services":{"identity":{"config":{"selfservice":{"flows":{"registration":{"after":{"password":{"hooks":"unreadable"}}}}}}}}}`))
-	}))
-	defer srv.Close()
-	resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:selfservice_flows_registration_after_password_hook_session")
-	assert.True(t, resp.Diagnostics.HasError(), "malformed hooks must not import as false")
 }

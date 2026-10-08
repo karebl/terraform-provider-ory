@@ -132,6 +132,22 @@ func TestAccProjectConfigResource_basic(t *testing.T) {
 					"smtp_connection_uri",
 				},
 			},
+			// Selected-field import must recover both configured scalar values.
+			{
+				ResourceName:      "ory_project_config.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["ory_project_config.test"]
+					if !ok {
+						return "", fmt.Errorf("ory_project_config.test not in state")
+					}
+					return rs.Primary.ID + ":cors_enabled,selfservice_methods_password_config_min_password_length", nil
+				},
+				// cors_origins is a list, which field selection does not support;
+				// smtp_connection_uri is write-only.
+				ImportStateVerifyIgnore: []string{"cors_origins", "smtp_connection_uri"},
+			},
 		},
 	})
 }
