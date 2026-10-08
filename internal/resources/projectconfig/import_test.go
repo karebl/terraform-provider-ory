@@ -31,6 +31,18 @@ const importProjectDocument = `{
   }}}
 }`
 
+func jsonServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		assert.Equal(t, http.MethodGet, req.Method)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func importConfig(t *testing.T, r *ProjectConfigResource, id string) *resource.ImportStateResponse {
 	t.Helper()
 	ctx := context.Background()
@@ -100,12 +112,7 @@ func TestImportProjectConfig_LegacyIDDoesNotAcquireFields(t *testing.T) {
 }
 
 func TestImportProjectConfig_WarnsForUnselectedCORS(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		assert.Equal(t, http.MethodGet, req.Method)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(strings.Replace(importProjectDocument, `"enabled":false`, `"enabled":true`, 1)))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusOK, strings.Replace(importProjectDocument, `"enabled":false`, `"enabled":true`, 1))
 	for _, selection := range []string{"session_lifespan", "session_lifespan,cors_enabled"} {
 		t.Run(selection, func(t *testing.T) {
 			resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:"+selection)
@@ -121,12 +128,7 @@ func TestImportProjectConfig_WarnsForUnselectedCORS(t *testing.T) {
 }
 
 func TestImportProjectConfig_DefaultReturnURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		assert.Equal(t, http.MethodGet, req.Method)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(importProjectDocument))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusOK, importProjectDocument)
 	r := projectConfigResourceForServer(t, srv.URL)
 	resp := importConfig(t, r, "proj-1:default_return_url")
 	require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
@@ -150,12 +152,7 @@ func TestImportProjectConfig_IntegerAndDeprecatedAlias(t *testing.T) {
 		for _, value := range []string{"12", "0"} {
 			t.Run(field+"="+value, func(t *testing.T) {
 				document := strings.Replace(importProjectDocument, `"password":{"enabled":true}`, `"password":{"enabled":true,"config":{"min_password_length":`+value+`}}`, 1)
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-					assert.Equal(t, http.MethodGet, req.Method)
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(document))
-				}))
-				defer srv.Close()
+				srv := jsonServer(t, http.StatusOK, document)
 				resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:"+field)
 				require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 				var imported types.Int64
@@ -186,11 +183,18 @@ func TestImportProjectConfig_RejectsUnsafeSelectionBeforeReading(t *testing.T) {
 		"proj-1:session_tokenizer_templates",
 		"proj-1:courier_http_request_config_body",
 		"proj-1:selfservice_flows_registration_after_password_hook_session",
+		"proj-1:mfa_enforcement",
+		"proj-1:smtp_connection_uri_wo_version",
 	} {
 		t.Run(id, func(t *testing.T) {
 			// A nil client ensures validation happens before any API access.
 			resp := importConfig(t, &ProjectConfigResource{}, id)
-			assert.True(t, resp.Diagnostics.HasError(), "invalid import must fail: %s", id)
+			require.True(t, resp.Diagnostics.HasError(), "invalid import must fail: %s", id)
+			if id == "proj-1:mfa_enforcement" || id == "proj-1:smtp_connection_uri_wo_version" {
+				require.Len(t, resp.Diagnostics.Errors(), 1)
+				assert.Equal(t, "Unsupported Project Config Import Field", resp.Diagnostics.Errors()[0].Summary())
+				assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "has no reader")
+			}
 		})
 	}
 }
@@ -201,7 +205,6 @@ func TestImportProjectConfig_DoesNotInventUnreadableValues(t *testing.T) {
 		document string
 		guidance string
 	}{
-		{field: "smtp_connection_uri_wo_version"},                          // Local metadata, with no API value.
 		{field: "selfservice_methods_totp_config_issuer"},                  // Readable string, absent from the response.
 		{field: "selfservice_methods_password_config_min_password_length"}, // Readable integer, absent from the response.
 		{
@@ -215,11 +218,7 @@ func TestImportProjectConfig_DoesNotInventUnreadableValues(t *testing.T) {
 			if document == "" {
 				document = importProjectDocument
 			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(document))
-			}))
-			defer srv.Close()
+			srv := jsonServer(t, http.StatusOK, document)
 			resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:session_lifespan,"+tc.field)
 			require.True(t, resp.Diagnostics.HasError(), "one unavailable field must fail the import without inventing a default")
 			if tc.guidance != "" {
@@ -272,12 +271,7 @@ func TestImportProjectConfig_NormalizedRevision(t *testing.T) {
 func TestImportProjectConfig_ReportsReadFailure(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(status)
-				_, _ = w.Write([]byte(`{"error":{"message":"cannot read project"}}`))
-			}))
-			defer srv.Close()
+			srv := jsonServer(t, status, `{"error":{"message":"cannot read project"}}`)
 			resp := importConfig(t, projectConfigResourceForServer(t, srv.URL), "proj-1:session_lifespan")
 			assert.True(t, resp.Diagnostics.HasError(), "failed reads must not import an empty baseline")
 		})

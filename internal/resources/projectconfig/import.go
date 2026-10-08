@@ -44,6 +44,10 @@ func (r *ProjectConfigResource) importSelectedFields(ctx context.Context, projec
 			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q is sensitive or write-only and cannot be imported by field selection.", name))
 			return
 		}
+		if name == "mfa_enforcement" || name == "smtp_connection_uri_wo_version" {
+			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q has no reader and cannot be imported by field selection.", name))
+			return
+		}
 		// This reader needs an existing inline payload to resolve storage URLs.
 		if name == "courier_http_request_config_body" {
 			resp.Diagnostics.AddError("Unsupported Project Config Import Field", fmt.Sprintf("%q reads back as a storage URL, so field selection cannot recover its inline base64 payload.", name))
