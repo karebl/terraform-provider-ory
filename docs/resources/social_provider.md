@@ -655,6 +655,33 @@ resource "ory_social_provider" "google" {
 
 ~> **Upgrading and importing:** If Ory holds a `claims_source` that your configuration does not declare, the first plan after an upgrade or an import shows `claims_source = "<value>" -> null`. Declare the value shown to keep the provider unchanged. Applying `"id_token" -> null` changes nothing at login. Applying `"userinfo" -> null` makes Ory take the claims from the ID token, so a mapper that reads claims found only in the userinfo response stops filling those traits. A create for a `provider_id` that already exists in Ory shows no such line and still clears the value, so import the provider first or declare its value.
 
+## Requested Claims
+
+Set `requested_claims` to request specific claims with the OpenID Connect [claims parameter](https://openid.net/specs/openid-connect-core-1_0.html#ClaimsParameter). The value is a JSON object with `id_token` and `userinfo` keys. A null claim value requests that claim in the default manner.
+
+The generic provider and the OpenID Connect providers built on it send `requested_claims`, for example Google, Microsoft, Apple and NetID. Providers such as GitHub ignore it.
+
+```hcl
+resource "ory_social_provider" "google" {
+  provider_id   = "google"
+  provider_type = "google"
+  client_id     = var.google_client_id
+  client_secret = var.google_client_secret
+  scope         = ["openid", "email", "profile"]
+
+  requested_claims = jsonencode({
+    id_token = {
+      email          = null
+      email_verified = { essential = true }
+    }
+  })
+}
+```
+
+Use `jsonencode` so the string matches the compact JSON that Ory returns. A hand-formatted JSON string can produce a persistent diff.
+
+~> **Upgrading and importing:** If Ory holds `requested_claims` that your configuration does not declare, the first plan after an upgrade or an import shows `requested_claims = "<value>" -> null`. Declare the value shown with `jsonencode` to keep the provider unchanged. Applying `-> null` stops Ory from sending the `claims` parameter, so the provider may stop returning those claims and a mapper that reads them stops filling those traits. A create for a `provider_id` that already exists in Ory shows no such line and still clears the value, so import the provider first or declare its value.
+
 ## Important Behaviors
 
 - **`provider_id` and `provider_type` cannot be changed** after creation. Changing either forces a new resource.
@@ -715,6 +742,7 @@ The `provider_id` is the unique identifier you chose when creating the provider.
 - `organization_id` (String) Organization ID to associate this OIDC provider with (for B2B SSO). Set it to the ID of an existing `ory_organization`. The provider is then only offered to users of that organization, and the callback URL gains an `/organization/<organization_id>` segment. Leave it unset for a normal social sign-in provider that every user can use. Requires a B2B plan.
 - `pkce` (String) PKCE (Proof Key for Code Exchange) behavior for the OAuth2 authorization code flow. "auto" (default) enables PKCE when the upstream provider advertises support via OIDC discovery; "force" always sends PKCE (use only with providers known to support it); "never" disables PKCE.
 - `project_id` (String) Project ID. If not set, uses provider's project_id.
+- `requested_claims` (String) OpenID Connect claims to request from the provider, as a JSON object with the keys "id_token" and "userinfo". Ory sends it as the "claims" parameter of the authorization request. Use jsonencode to set it. Leave unset to request no specific claims.
 - `scope` (List of String) OAuth2 scopes to request.
 - `subject_source` (String) Source of the subject identifier for a Microsoft provider. "userinfo" (the API default) takes the subject from the "sub" claim of the ID token. "me" takes it from the "id" field of https://graph.microsoft.com/v1.0/me. "oid" takes the Object ID. Changing this value on a provider that already has identities stops those users from matching their existing identity. Leave unset to use the Ory default ("userinfo").
 - `tenant` (String) Tenant ID (for Microsoft/Azure providers).

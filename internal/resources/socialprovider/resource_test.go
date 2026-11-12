@@ -1234,3 +1234,60 @@ func TestAccSocialProviderResource_claimsSource(t *testing.T) {
 		},
 	})
 }
+
+// TestAccSocialProviderResource_requestedClaims covers requested_claims through create, update, removal, and import.
+func TestAccSocialProviderResource_requestedClaims(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			acctest.AccPreCheck(t)
+			acctest.RequireSocialProviderTests(t)
+		},
+		ProtoV6ProviderFactories: acctest.TestAccProtoV6ProviderFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config: acctest.LoadTestConfig(t, "testdata/with_requested_claims.tf.tmpl", nil),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("ory_social_provider.test", "id"),
+					resource.TestCheckResourceAttr("ory_social_provider.test", "provider_id", "test-google-requested-claims"),
+					resource.TestCheckResourceAttr("ory_social_provider.test", "requested_claims", `{"id_token":{"email":null,"email_verified":{"essential":true}}}`),
+				),
+			},
+			{
+				Config:   acctest.LoadTestConfig(t, "testdata/with_requested_claims.tf.tmpl", nil),
+				PlanOnly: true,
+			},
+			{
+				Config: acctest.LoadTestConfig(t, "testdata/with_requested_claims_updated.tf.tmpl", nil),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("ory_social_provider.test", "requested_claims", `{"id_token":{"email":null,"email_verified":{"essential":true}},"userinfo":{"email":null}}`),
+				),
+			},
+			{
+				Config:   acctest.LoadTestConfig(t, "testdata/with_requested_claims_updated.tf.tmpl", nil),
+				PlanOnly: true,
+			},
+			{
+				Config: acctest.LoadTestConfig(t, "testdata/with_requested_claims_removed.tf.tmpl", nil),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("ory_social_provider.test", "requested_claims"),
+				),
+			},
+			{
+				Config:   acctest.LoadTestConfig(t, "testdata/with_requested_claims_removed.tf.tmpl", nil),
+				PlanOnly: true,
+			},
+			// Re-apply the claims so the import step verifies a value that Read must return.
+			{
+				Config: acctest.LoadTestConfig(t, "testdata/with_requested_claims.tf.tmpl", nil),
+				Check:  resource.TestCheckResourceAttr("ory_social_provider.test", "requested_claims", `{"id_token":{"email":null,"email_verified":{"essential":true}}}`),
+			},
+			{
+				ResourceName:            "ory_social_provider.test",
+				ImportState:             true,
+				ImportStateId:           "test-google-requested-claims",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"client_secret"},
+			},
+		},
+	})
+}

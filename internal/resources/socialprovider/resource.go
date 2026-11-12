@@ -93,6 +93,7 @@ type SocialProviderResourceModel struct {
 	FrontChannelLogout         types.Bool   `tfsdk:"front_channel_logout"`
 	SubjectSource              types.String `tfsdk:"subject_source"`
 	ClaimsSource               types.String `tfsdk:"claims_source"`
+	RequestedClaims            types.String `tfsdk:"requested_claims"`
 }
 
 func (r *SocialProviderResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -309,6 +310,10 @@ func (r *SocialProviderResource) Schema(ctx context.Context, req resource.Schema
 				Optional:    true,
 				Validators:  []validator.String{stringvalidator.OneOf("id_token", "userinfo")},
 			},
+			"requested_claims": schema.StringAttribute{
+				Description: "OpenID Connect claims to request from the provider, as a JSON object with the keys \"id_token\" and \"userinfo\". Ory sends it as the \"claims\" parameter of the authorization request. Use jsonencode to set it. Leave unset to request no specific claims.",
+				Optional:    true,
+			},
 		},
 	}
 }
@@ -331,6 +336,13 @@ func (r *SocialProviderResource) ValidateConfig(ctx context.Context, req resourc
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	if !config.RequestedClaims.IsNull() && !config.RequestedClaims.IsUnknown() {
+		var claims map[string]interface{}
+		if err := json.Unmarshal([]byte(config.RequestedClaims.ValueString()), &claims); err != nil || len(claims) == 0 {
+			resp.Diagnostics.AddAttributeError(path.Root("requested_claims"), "Invalid Attribute Value", "requested_claims must be a non-empty JSON object. Use jsonencode to set it.")
+		}
 	}
 
 	// Ensure provider_type is specified and known, since it is required to build the API payload.
@@ -573,6 +585,9 @@ func (r *SocialProviderResource) buildProviderConfig(ctx context.Context, plan *
 	}
 	if !plan.ClaimsSource.IsNull() && !plan.ClaimsSource.IsUnknown() {
 		config["claims_source"] = plan.ClaimsSource.ValueString()
+	}
+	if !plan.RequestedClaims.IsNull() && !plan.RequestedClaims.IsUnknown() {
+		config["requested_claims"] = json.RawMessage(plan.RequestedClaims.ValueString())
 	}
 
 	// fedcm_config_url — only send when set to a non-empty value. Omitting it on
@@ -1055,6 +1070,12 @@ func (r *SocialProviderResource) Read(ctx context.Context, req resource.ReadRequ
 	}
 	state.SubjectSource = readOptionalString(provider, "subject_source")
 	state.ClaimsSource = readOptionalString(provider, "claims_source")
+	state.RequestedClaims = types.StringNull()
+	if claims, ok := provider["requested_claims"].(map[string]interface{}); ok && len(claims) > 0 {
+		if encoded, err := json.Marshal(claims); err == nil {
+			state.RequestedClaims = types.StringValue(string(encoded))
+		}
+	}
 
 	// Read fedcm_config_url from the API (returned on read), clearing stale state
 	// when the API omits it.

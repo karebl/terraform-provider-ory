@@ -57,6 +57,7 @@ func buildTestConfig(t *testing.T, model SocialProviderResourceModel) resource.V
 		"front_channel_logout":          tfBoolValue(model.FrontChannelLogout),
 		"subject_source":                tfStringValue(model.SubjectSource),
 		"claims_source":                 tfStringValue(model.ClaimsSource),
+		"requested_claims":              tfStringValue(model.RequestedClaims),
 	}
 
 	objType := tftypes.Object{
@@ -96,6 +97,7 @@ func buildTestConfig(t *testing.T, model SocialProviderResourceModel) resource.V
 			"front_channel_logout":          tftypes.Bool,
 			"subject_source":                tftypes.String,
 			"claims_source":                 tftypes.String,
+			"requested_claims":              tftypes.String,
 		},
 	}
 
@@ -436,4 +438,58 @@ func TestValidateConfig_UnknownProviderType_SkipsValidation(t *testing.T) {
 	r.ValidateConfig(ctx, req, &resp)
 
 	assert.False(t, resp.Diagnostics.HasError(), "expected no errors for unknown provider_type: %v", resp.Diagnostics.Errors())
+}
+
+func TestValidateConfig_RequestedClaims(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   types.String
+		wantErr bool
+	}{
+		{name: "object", value: types.StringValue(`{"id_token":{"email":null}}`)},
+		{name: "unknown", value: types.StringUnknown()},
+		{name: "empty string", value: types.StringValue(""), wantErr: true},
+		{name: "invalid JSON", value: types.StringValue("{id_token: {}}"), wantErr: true},
+		{name: "empty object", value: types.StringValue("{}"), wantErr: true},
+		{name: "JSON null", value: types.StringValue("null"), wantErr: true},
+		{name: "array", value: types.StringValue("[]"), wantErr: true},
+		{name: "JSON string", value: types.StringValue(`"text"`), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := buildTestConfig(t, SocialProviderResourceModel{
+				ProviderID:      types.StringValue("google"),
+				ProviderType:    types.StringValue("google"),
+				ClientID:        types.StringValue("my-client-id"),
+				ClientSecret:    types.StringValue("my-client-secret"),
+				RequestedClaims: tt.value,
+			})
+			var resp resource.ValidateConfigResponse
+			(&SocialProviderResource{}).ValidateConfig(context.Background(), req, &resp)
+
+			assert.Equal(t, tt.wantErr, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		})
+	}
+}
+
+func TestValidateConfig_RequestedClaimsWithUnrelatedUnknowns(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		providerType types.String
+		secret       types.String
+	}{
+		{name: "unknown secret", providerType: types.StringValue("google"), secret: types.StringUnknown()},
+		{name: "unknown provider type", providerType: types.StringUnknown(), secret: types.StringValue("my-secret")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := buildTestConfig(t, SocialProviderResourceModel{
+				ProviderID: types.StringValue("google"), ProviderType: tt.providerType,
+				ClientID: types.StringValue("my-client-id"), ClientSecret: tt.secret,
+				RequestedClaims: types.StringValue(""),
+			})
+			var resp resource.ValidateConfigResponse
+			(&SocialProviderResource{}).ValidateConfig(context.Background(), req, &resp)
+			assert.True(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		})
+	}
 }

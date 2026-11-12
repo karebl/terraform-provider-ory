@@ -2,6 +2,7 @@ package socialprovider
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -250,6 +251,35 @@ func TestBuildProviderConfig_ClaimsSource(t *testing.T) {
 			}
 			require.True(t, ok, "claims_source must be sent to the API")
 			assert.Equal(t, tt.value.ValueString(), got)
+		})
+	}
+}
+
+func TestBuildProviderConfig_RequestedClaims(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       types.String
+		wantPresent bool
+	}{
+		{name: "object", value: types.StringValue(`{"id_token":{"email":null}}`), wantPresent: true},
+		{name: "null", value: types.StringNull()},
+		{name: "unknown", value: types.StringUnknown()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := baseProviderPlan()
+			plan.RequestedClaims = tt.value
+			config := (&SocialProviderResource{}).buildProviderConfig(context.Background(), plan,
+				plan.ClientID, types.StringValue("test-client-secret"), types.StringNull())
+			_, ok := config["requested_claims"]
+			if !tt.wantPresent {
+				assert.False(t, ok, "requested_claims must be absent from the payload")
+				return
+			}
+			require.True(t, ok)
+			encoded, err := json.Marshal(config)
+			require.NoError(t, err)
+			assert.Contains(t, string(encoded), `"requested_claims":{"id_token":{"email":null}}`)
 		})
 	}
 }
